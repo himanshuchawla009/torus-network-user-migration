@@ -1,0 +1,21 @@
+{
+  "name": "migrate-torus-key",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@toruslabs/customauth": "^11.0.0",
+    "@toruslabs/fetch-node-details": "^8.0.0",
+    "@toruslabs/torus.js": "^6.2.0",
+    "bn.js": "^5.2.1",
+    "dotenv": "^16.0.3",
+    "jsonwebtoken": "^8.5.1",
+    "node-window-polyfill": "^1.0.2"
+  }
+}
