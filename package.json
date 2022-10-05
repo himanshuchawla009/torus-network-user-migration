@@ -15,7 +15,6 @@
     "@toruslabs/torus.js": "^6.2.0",
     "bn.js": "^5.2.1",
     "dotenv": "^16.0.3",
-    "jsonwebtoken": "^8.5.1",
-    "node-window-polyfill": "^1.0.2"
+    "jsonwebtoken": "^8.5.1"
   }
 }

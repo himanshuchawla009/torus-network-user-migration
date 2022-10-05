@@ -1,9 +1,11 @@
-const CustomAuth = require("@toruslabs/customauth");
+const Torus = require("@toruslabs/torus.js").default;
 const BN = require("bn.js");
 const jwt = require("jsonwebtoken");
-const { TORUS_NETWORK } = require("@toruslabs/fetch-node-details");
+const fetchNodeDetails = require("@toruslabs/fetch-node-details/dist/fetchNodeDetails-node");
 require("dotenv").config();
 
+const TORUS_NETWORK = fetchNodeDetails.TORUS_NETWORK
+console.log("fetchNodeDetails", fetchNodeDetails.default.PROXY_ADDRESS_AQUA);
 const jwtKey = process.env.JWT_PRIVATE_KEY;
 if (!jwtKey) {
   console.error("add your jwt private key in .env file");
@@ -35,24 +37,41 @@ const generateIdToken = (email, alg) => {
 
 const enableOneKey = true;
 
-
-const torusAqua = new CustomAuth.default({
-    baseUrl: "https://example.com",
+const torusAqua = new Torus({
+    signerHost: "https://signer-polygon.tor.us/api/sign",
+    allowHost: "https://signer-polygon.tor.us/api/allow",
+    network: "aqua",
     enableOneKey,
-    network: TORUS_NETWORK.AQUA,
+});
+const TORUS_NODE_MANAGER_AQUA = new fetchNodeDetails.default({ network: TORUS_NETWORK.AQUA, proxyAddress: fetchNodeDetails.default.PROXY_ADDRESS_AQUA });
+const torusCyan = new Torus({
+    signerHost: "https://signer-polygon.tor.us/api/sign",
+    allowHost: "https://signer-polygon.tor.us/api/allow",
+    network: "cyan",
+    enableOneKey,
 });
 
-const torusCyan = new CustomAuth.default({
-    baseUrl: "https://example.com",
-    enableOneKey,
-    network: TORUS_NETWORK.CYAN,
-});
-
+const TORUS_NODE_MANAGER_CYAN = new fetchNodeDetails.default({ network: TORUS_NETWORK.CYAN, proxyAddress: fetchNodeDetails.default.PROXY_ADDRESS_CYAN });
 
 
 async function loginToCyan(verifier, verifierId, idToken) {
-    const cyanKeyDetails =  await torusCyan.getTorusKey(verifier, verifierId, { verifier_id: verifierId} , idToken);
-    return cyanKeyDetails.privateKey;
+    const verifierDetails = { verifier, verifierId };
+
+    const { torusNodeEndpoints, torusIndexes, torusNodePub } = await TORUS_NODE_MANAGER_CYAN.getNodeDetails(verifierDetails);
+
+    const pubDetails = await torusCyan.getPublicAddress(torusNodeEndpoints, torusNodePub, verifierDetails, true);
+
+    const retrieveSharesResponse = await torusCyan.retrieveShares(
+        torusNodeEndpoints,
+        torusIndexes,
+        verifier,
+        { verifier_id: verifierId },
+        idToken
+    );
+    if (pubDetails.address.toLowerCase() !== retrieveSharesResponse.ethAddress.toLowerCase() ) {
+        throw new Error("Failed to login with aqua");
+    }
+   return retrieveSharesResponse.privKey
 }
 
 
@@ -62,15 +81,18 @@ async function loginToCyan(verifier, verifierId, idToken) {
  * @param {*} verifierId 
  * @param {*} idToken 
  */
-async function migrateUserFromCyanToAqua(aquaKeyDetails, verifier, verifierId, idToken) {
+async function migrateUserFromCyanToAqua(aquaKey, verifier, verifierId, idToken) {
     // login with cyan first
-    const cyanKeyDetails = await torusCyan.getTorusKey(verifier, verifierId, { verifier_id: verifierId} , idToken);
+    const cyanPrivKey = await loginToCyan(verifier, verifierId, idToken);
 
     // migrate cyan user to aqua
-    await torusAqua.torus.setCustomKey({ metadataNonce: new BN(0), privKeyHex: aquaKeyDetails.privateKey, customKeyHex: cyanKeyDetails.privateKey });
+    await torusAqua.setCustomKey({ metadataNonce: new BN(0), privKeyHex: aquaKey, customKeyHex: cyanPrivKey });
+
+    const keyPair = torusAqua.ec.keyFromPrivate(aquaKey);
+
     // user migrated, now aqua key details for this user will be returned same as cyan key details
-    const metadataNonce = await torusAqua.torus.getMetadata({ pub_key_X: aquaKeyDetails.pubKey.pub_key_X, pub_key_Y: aquaKeyDetails.pubKey.pub_key_Y });
-    const finalPrivKey = new BN(aquaKeyDetails.privateKey, 16).add(metadataNonce).umod(torusAqua.torus.ec.curve.n);
+    const metadataNonce = await torusAqua.getMetadata({ pub_key_X: keyPair.getPublic().getX().toString("hex"), pub_key_Y: keyPair.getPublic().getY().toString("hex"), });
+    const finalPrivKey = new BN(aquaKey, 16).add(metadataNonce).umod(torusAqua.ec.curve.n);
     return finalPrivKey.toString("hex");
 }
 
@@ -84,18 +106,38 @@ async function migrateUserFromCyanToAqua(aquaKeyDetails, verifier, verifierId, i
  * @returns  private key of user from aqua network
  */
 async function loginToAqua(isCyanUser, isMigrated, verifier, verifierId, idToken) {
-    const aquaKeyDetails = await torusAqua.getTorusKey(verifier, verifierId, { verifier_id: verifierId} , idToken);
+    const verifierDetails = { verifier, verifierId };
+
+    const { torusNodeEndpoints, torusIndexes, torusNodePub } = await TORUS_NODE_MANAGER_AQUA.getNodeDetails(verifierDetails);
+
+    // does the key assign
+    const pubDetails = await torusAqua.getPublicAddress(torusNodeEndpoints, torusNodePub, verifierDetails, true);
+
+    const retrieveSharesResponse = await torusAqua.retrieveShares(
+        torusNodeEndpoints,
+        torusIndexes,
+        verifier,
+        { verifier_id: verifierId },
+        idToken
+    );
+
+    if (pubDetails.address.toLowerCase() !== retrieveSharesResponse.ethAddress.toLowerCase() ) {
+        throw new Error("Failed to login with aqua");
+    }
+
     if (isCyanUser) {
         if (!isMigrated) {
-           return migrateUserFromCyanToAqua(aquaKeyDetails, verifier, verifierId, idToken);
+           return migrateUserFromCyanToAqua(retrieveSharesResponse.privKey, verifier, verifierId, idToken);
         } else {
-            const metadataNonce = await torusAqua.torus.getMetadata({ pub_key_X: aquaKeyDetails.pubKey.pub_key_X, pub_key_Y: aquaKeyDetails.pubKey.pub_key_Y });
-            const finalPrivKey = new BN(aquaKeyDetails.privateKey, 16).add(metadataNonce).umod(torusAqua.torus.ec.curve.n);
+            const keyPair = torusAqua.ec.keyFromPrivate(retrieveSharesResponse.privKey);
+
+            const metadataNonce = await torusAqua.getMetadata({ pub_key_X: keyPair.getPublic().getX().toString("hex"), pub_key_Y: keyPair.getPublic().getY().toString("hex") });
+            const finalPrivKey = new BN(retrieveSharesResponse.privKey, 16).add(metadataNonce).umod(torusCyan.ec.curve.n);
             return finalPrivKey.toString("hex")
         }
 
     } else {
-        return aquaKeyDetails.privateKey;
+        return retrieveSharesResponse.privKey;
     }
 }
 
@@ -115,28 +157,26 @@ async function loginToAqua(isCyanUser, isMigrated, verifier, verifierId, idToken
  * 
  */
 async function testLoginMigration() {
-    const verifierId = "hello11@test.com";
+    const verifierId = "hello24@test.com";
     let idToken = generateIdToken(verifierId,"ES256");
 
     // Login to Cyan
     const cyanKey = await loginToCyan(verifier, verifierId, idToken);
-
+    console.log(`logged in to cyan`, verifierId);
 
     // renew id token
     idToken = generateIdToken(verifierId,"ES256");
-
-    console.log("cyan user Key", cyanKey);
     // Case 1. Login an existing cyan user to aqua
     // Note: we need to pass isCyanUser as true and isMigrated to false to loginToAqua
     // since user was first logged in to cyan, we need to migrate it to aqua for the first login.
     // subsequent logins will be handled by the aqua.
     let aquaKeyAfterMigration = await loginToAqua(true, false, verifier, verifierId, idToken);
-    console.log("aqua user Key after migration", aquaKeyAfterMigration);
 
     if (cyanKey !== aquaKeyAfterMigration) {
         console.log("key are different after migration");
         throw new Error("key are different after migration");
     }
+    console.log("cyan user migrated to aqua successfully");
 
     // renew id token
     idToken = generateIdToken(verifierId,"ES256");
@@ -145,12 +185,13 @@ async function testLoginMigration() {
     // Note: we pass isCyanUser as true and isMigrated as true to loginToAqua, 
     // since this cyan user is already migrated to aqua.
     aquaKeyAfterMigration = await loginToAqua(true, true, verifier, verifierId, idToken);
-    console.log("aqua user Key after migration login", aquaKeyAfterMigration);
 
     if (cyanKey !== aquaKeyAfterMigration) {
         console.log("key are different after migration");
         throw new Error("key are different after migration");
     }
+    console.log("cyan user logged in to aqua successfully");
+
 
     // Case 3: Login a new user to aqua
     const verifierId1 = "hello12@test.com";
@@ -163,6 +204,31 @@ async function testLoginMigration() {
 
 }
 
+
+// run this function to migrate users in bulk.
+const migrateUsersFromCyan = async (users) => {
+    users.forEach(async(user)=>{
+        const { verifier, verifierId, idToken } = user;
+        try {
+            const aquaKey = await loginToAqua(true, false, verifier, verifierId, idToken);
+            console.log("migrated user", verifierId, aquaKey);   
+        } catch (error) {
+            console.error(`failed to migrate user: ${verifierId} from cyan to aqua`, error);
+        }
+    })
+}
+
 (async ()=>{
   await testLoginMigration();
+
+// migrateUsersFromCyan([{
+//     verifier,
+//     verifierId: "hello102@test.com",
+//     idToken:  generateIdToken("hello102@test.com","ES256"),
+// },
+// {
+//     verifier,
+//     verifierId: "hello103@test.com",
+//     idToken:  generateIdToken("hello103@test.com","ES256"),
+// }])
 })();
