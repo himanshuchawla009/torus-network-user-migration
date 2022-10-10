@@ -1,3 +1,5 @@
+// CAUTION: RUN THIS SCRIPT ONLY IF YOU ARE SURE ABOUT WHAT YOU ARE DOING.
+
 const Torus = require("@toruslabs/torus.js").default;
 const BN = require("bn.js");
 const jwt = require("jsonwebtoken");
@@ -143,6 +145,7 @@ async function loginToAqua(isCyanUser, isMigrated, verifier, verifierId, idToken
 
 
 
+// CAUTION: RUN THIS SCRIPT ONLY IF YOU ARE SURE ABOUT WHAT YOU ARE DOING.
 
 /**
  * This function test migration of a user from web3auth
@@ -199,7 +202,9 @@ async function testLoginMigration() {
     idToken = generateIdToken(verifierId1,"ES256");
     // This is not a cyan user so both isCyanUser and isMigrated should be false
    const newAquaUserKey= await loginToAqua(false, false, verifier, verifierId1, idToken);
-    console.log("newAquaUserKey", newAquaUserKey);
+   if (!newAquaUserKey) {
+    console.log("Unable to login to aqua");
+  }
 
 
 }
@@ -211,7 +216,9 @@ const migrateUsersFromCyan = async (users) => {
         const { verifier, verifierId, idToken } = user;
         try {
             const aquaKey = await loginToAqua(true, false, verifier, verifierId, idToken);
-            console.log("migrated user", verifierId, aquaKey);   
+            if (!aquaKey) {
+                console.log("Unable to login to aqua");
+            }
         } catch (error) {
             console.error(`failed to migrate user: ${verifierId} from cyan to aqua`, error);
         }
